@@ -1,17 +1,10 @@
 import { useMemo, useState } from 'react'
 import { ArrowUp, ArrowDown, ArrowUpDown, Search, MapPin, Info, SearchX } from 'lucide-react'
-import { TEAMS, PROVENANCE } from '@/engine/worldcup'
+import { TEAMS, PROVENANCE, eloFraction } from '@/engine/worldcup'
 import { Card, Panel, SectionHeading, Stat, Badge, Callout, Field, Input, Select, Button, EmptyState } from '@/components/ui'
 import { cx } from '@/lib/cx'
 import { CONFEDERATION_NAMES } from '@/lib/tournament'
 import Reveal from '@/components/Reveal'
-
-const ELO_MIN = Math.min(...TEAMS.map((t) => t.elo))
-const ELO_MAX = Math.max(...TEAMS.map((t) => t.elo))
-const eloFraction = (elo) => (elo - ELO_MIN) / (ELO_MAX - ELO_MIN)
-
-const CONFEDERATIONS = [...new Set(TEAMS.map((t) => t.confederation))].sort()
-const TOP_RATED = [...TEAMS].sort((a, b) => b.elo - a.elo)[0]
 
 const DEFAULT_DIR = { team: 'asc', confederation: 'asc', pot: 'asc', elo: 'desc' }
 const COMPARE = {
@@ -46,6 +39,15 @@ export default function Ratings() {
   const [sortDir, setSortDir] = useState('desc')
   const [conf, setConf] = useState('all')
   const [query, setQuery] = useState('')
+
+  // Derived from the current TEAMS. Empty deps means this recomputes once per
+  // mount — and a data update remounts the tree (see main.jsx), so the field
+  // list and top-rated team stay in step with edited ratings.
+  const { CONFEDERATIONS, TOP_RATED } = useMemo(() => {
+    const confs = [...new Set(TEAMS.map((t) => t.confederation))].sort()
+    const top = [...TEAMS].sort((a, b) => b.elo - a.elo)[0]
+    return { CONFEDERATIONS: confs, TOP_RATED: top }
+  }, [])
 
   const onSort = (key) => {
     if (key === sortKey) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))

@@ -23,8 +23,10 @@ import { mulberry32, hashSeed, shuffle } from './prng.js'
 
 /* ------------------------------------------------------------------ data -- */
 
-// Data provenance, carried inline in the real data/teams_2026.json.
-export const PROVENANCE = {
+// Data provenance, carried inline in the real data/teams_2026.json. `let`, not
+// `const`, so the owner can update the snapshot date / source note from the
+// admin (see applyRemoteData at the foot of this file) without a rebuild.
+export let PROVENANCE = {
   eloSource: 'eloratings.net (World Football Elo Ratings)',
   eloAsOf: '2026-07-19',
   note: 'A dated Elo snapshot for reproducible simulation, not live values.',
@@ -34,7 +36,10 @@ export const PROVENANCE = {
 // the 42 direct qualifiers plus the six March 2026 play-off winners (Bosnia,
 // Sweden, Turkey, Czech Republic, DR Congo, Iraq). Each carries its real
 // confederation, seeding pot (1–4) and the dated Elo rating the model reads.
-export const TEAMS = [
+// `let` so the owner can update ratings/names from the admin; the applied edits
+// are merged onto these 48 by code (membership and pot stay fixed — they are
+// engine invariants), so a bad payload can never break the draw.
+export let TEAMS = [
   // Pot 1 — the top seeds (three hosts + the highest-rated sides).
   { code: 'USA', name: 'United States', confederation: 'CONCACAF', pot: 1, host: true, elo: 1746 },
   { code: 'MEX', name: 'Mexico', confederation: 'CONCACAF', pot: 1, host: true, elo: 1913 },
@@ -89,9 +94,10 @@ export const TEAMS = [
   { code: 'IRQ', name: 'Iraq', confederation: 'AFC', pot: 4, host: false, elo: 1561 },
 ]
 
-// Code → team, and code → Elo, for O(1) lookups during a simulation.
-const TEAM_OF = new Map(TEAMS.map((t) => [t.code, t]))
-const ELO_OF = new Map(TEAMS.map((t) => [t.code, t.elo]))
+// Code → team, and code → Elo, for O(1) lookups during a simulation. `let` so
+// applyRemoteData can rebuild them after the ratings are edited.
+let TEAM_OF = new Map(TEAMS.map((t) => [t.code, t]))
+let ELO_OF = new Map(TEAMS.map((t) => [t.code, t.elo]))
 
 /** The Elo rating for a team code (all codes are real teams from TEAMS). */
 export function teamElo(code) {
@@ -103,13 +109,30 @@ export function teamOf(code) {
   return TEAM_OF.get(code)
 }
 
+/**
+ * A team's Elo as a 0..1 fraction of the current field's rating band, for the
+ * bar widths in the Draw and Ratings screens. Computed live from TEAMS (not a
+ * module-level constant) so it tracks edited ratings after a data update.
+ */
+export function eloFraction(elo) {
+  let min = Infinity
+  let max = -Infinity
+  for (const t of TEAMS) {
+    if (t.elo < min) min = t.elo
+    if (t.elo > max) max = t.elo
+  }
+  if (!(max > min)) return 1 // all equal (or empty) — avoid divide-by-zero
+  return (elo - min) / (max - min)
+}
+
 /* ------------------------------------------------- Elo → scoreline model -- */
 
 // League-average goals per team per game; ~2.7 total is typical for men's
 // international football, so ~1.35 per side is the neutral baseline (elo.py).
-export const BASE_GOALS = 1.35
+// `let` so the owner can tune the model from the admin (see applyRemoteData).
+export let BASE_GOALS = 1.35
 // How strongly the Elo gap tilts the goal split between the two sides.
-export const GOAL_TILT = 0.6
+export let GOAL_TILT = 0.6
 const MIN_LAMBDA = 0.15
 const MAX_LAMBDA = 5.0
 
@@ -594,4 +617,62 @@ export function buildResults(counts, done) {
 /** Teams sorted by Elo (the pre-run ranking shown before any simulation). */
 export function teamsByRating() {
   return TEAMS.slice().sort((a, b) => b.elo - a.elo)
+}
+
+/* ------------------------------------------------------------ remote data -- */
+
+/** Coerce anything to a finite number, or fall back. */
+const num = (v, fallback) => {
+  const n = Number(v)
+  return Number.isFinite(n) ? n : fallback
+}
+
+const str = (v, fallback) => (typeof v === 'string' && v.trim() ? v.trim() : fallback)
+
+/**
+ * Apply datasets fetched from the admin DB, reassigning the module bindings.
+ * Everything is defensive: a missing or malformed dataset leaves that binding on
+ * its bundled default, so a partial or broken payload can never blank the app or
+ * break the simulation. `datasets` is a { [slug]: data } map (see indexBySlug).
+ */
+export function applyRemoteData(datasets) {
+  if (!datasets || typeof datasets !== 'object') return
+
+  // settings (singleton): the two model knobs and the data provenance shown on
+  // the Draw/Ratings screens.
+  const s = datasets.settings
+  if (s && typeof s === 'object') {
+    const bg = num(s.baseGoals, null)
+    if (bg != null && bg > 0) BASE_GOALS = bg
+    const gt = num(s.goalTilt, null)
+    if (gt != null) GOAL_TILT = gt
+    PROVENANCE = {
+      eloSource: str(s.eloSource, PROVENANCE.eloSource),
+      eloAsOf: str(s.eloAsOf, PROVENANCE.eloAsOf),
+      note: str(s.note, PROVENANCE.note),
+    }
+  }
+
+  // teams (list): merge editable attributes onto the fixed 48 by code. Team
+  // membership and seeding pot are engine invariants (12 groups, one team per
+  // pot per group), so they are NOT taken from the payload — only elo, name,
+  // confederation and host status are. Rows with an unknown code are ignored;
+  // any bundled team the payload omits keeps its values. This makes a malformed
+  // team payload a safe no-op rather than a broken draw.
+  if (Array.isArray(datasets.teams) && datasets.teams.length) {
+    const byCode = new Map(datasets.teams.filter((r) => r && r.code).map((r) => [String(r.code), r]))
+    TEAMS = TEAMS.map((t) => {
+      const r = byCode.get(t.code)
+      if (!r) return t
+      return {
+        ...t,
+        name: str(r.name, t.name),
+        confederation: str(r.confederation, t.confederation),
+        host: typeof r.host === 'boolean' ? r.host : t.host,
+        elo: num(r.elo, t.elo),
+      }
+    })
+    TEAM_OF = new Map(TEAMS.map((t) => [t.code, t]))
+    ELO_OF = new Map(TEAMS.map((t) => [t.code, t.elo]))
+  }
 }

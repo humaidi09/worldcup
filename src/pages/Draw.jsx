@@ -1,16 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Shuffle, MapPin, Users, AlertTriangle, Info } from 'lucide-react'
-import { TEAMS, drawGroups, makeRng, PROVENANCE } from '@/engine/worldcup'
+import { TEAMS, drawGroups, makeRng, PROVENANCE, eloFraction } from '@/engine/worldcup'
 import { Button, Card, Panel, SectionHeading, Stat, Badge, Callout, Field, Input, Toggle } from '@/components/ui'
 import Reveal from '@/components/Reveal'
 import { CONFEDERATION_NAMES, randomSeed } from '@/lib/tournament'
 
-// Fixed Elo band across the whole field, so a team's bar means the same thing in
-// every group card (not autoscaled per group).
-const ELO_MIN = Math.min(...TEAMS.map((t) => t.elo))
-const ELO_MAX = Math.max(...TEAMS.map((t) => t.elo))
-const eloFraction = (elo) => (elo - ELO_MIN) / (ELO_MAX - ELO_MIN)
-
+// The team-rating bars scale against the whole field's Elo band, so a bar means
+// the same thing in every group card. eloFraction is computed live in the engine
+// (from the current TEAMS), so it tracks edited ratings after a data update.
 function TeamRow({ team }) {
   return (
     <li className="rounded-xl border border-hair bg-fill px-3 py-2.5">
